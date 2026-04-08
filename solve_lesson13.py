@@ -72,7 +72,7 @@ def norm_phone(value: object) -> str | None:
     Пример:
     "+7 (999) 111-22-33" -> "79991112233"
     """
-    if pd.isna(value):
+    if pd.isna(value):          
         return None
 
     # Приводим к строке, чтобы одинаково обработать и текст, и числа.
@@ -276,13 +276,14 @@ def solve_task_3(source: Path, out_path: Path) -> pd.DataFrame:
 
     Здесь важная идея:
     - сначала вычищаем явно нерабочие строки (служебные, пустые),
-    - потом убираем точные дубли,
-    - потом помечаем, является ли визит клиента первым или повторным.
+    - потом отмечаем точные дубли,
+    - для не-дублей помечаем, является ли визит клиента первым или повторным.
 
     Почему так:
     - "повторный визит" может быть нормальным событием (не ошибка),
       если дата/услуга отличается от предыдущей записи.
     - "точный дубль" (все ключевые поля совпали) чаще всего техническая копия.
+      Такие строки не удаляем сразу, а помечаем как "дубль" и очищаем ID.
     """
     df = pd.read_excel(source, sheet_name="3_Мусор_и_дубли", header=2)
 
@@ -308,21 +309,45 @@ def solve_task_3(source: Path, out_path: Path) -> pd.DataFrame:
     # если полностью совпадают клиент, телефон, дата, услуга и сумма.
     exact_key = ["Клиент", "phone_norm", "date_norm", "Услуга", "amount_num"]
     clean["is_exact_duplicate"] = clean.duplicated(subset=exact_key, keep="first")
-    clean = clean[~clean["is_exact_duplicate"]].copy()
 
-    # Для оставшихся строк считаем номер визита клиента:
-    # 1 - первый визит, 2 и выше - повторные.
-    clean["visit_number_for_client"] = (
-        clean.sort_values("date_norm").groupby(["Клиент", "phone_norm"]).cumcount() + 1
+    # Номер визита считаем только для уникальных записей (не дублей).
+    uniq = clean[~clean["is_exact_duplicate"]].copy()
+    uniq["visit_number_for_client"] = (
+        uniq.sort_values("date_norm").groupby(["Клиент", "phone_norm"]).cumcount() + 1
     )
-    clean["duplicate_note"] = clean["visit_number_for_client"].map(
-        lambda n: "repeat_visit" if n > 1 else "first_visit"
+    clean = clean.merge(
+        uniq[exact_key + ["visit_number_for_client"]],
+        on=exact_key,
+        how="left",
     )
+
+    # Маркировка строк:
+    # - дубль -> "дубль"
+    # - не дубль -> "первичный визит" / "повторный визит"
+    clean["duplicate_note"] = clean.apply(
+        lambda row: (
+            "дубль"
+            if row["is_exact_duplicate"]
+            else ("повторный визит" if row["visit_number_for_client"] > 1 else "первичный визит")
+        ),
+        axis=1,
+    )
+
+    # Для дублей очищаем ID, чтобы их можно было удалить вручную позже.
+    clean["id_out"] = clean["#"]
+    clean.loc[clean["is_exact_duplicate"], "id_out"] = None
 
     # Формируем итоговые колонки и имена в более удобном стиле.
     result = clean[
-        ["#", "date_norm", "Клиент", "phone_norm", "Услуга", "amount_num", "duplicate_note"]
-    ].rename(columns={"date_norm": "date", "phone_norm": "phone", "amount_num": "amount"})
+        ["id_out", "date_norm", "Клиент", "phone_norm", "Услуга", "amount_num", "duplicate_note"]
+    ].rename(
+        columns={
+            "id_out": "#",
+            "date_norm": "date",
+            "phone_norm": "phone",
+            "amount_num": "amount",
+        }
+    )
 
     result.to_excel(out_path, index=False)
     return result
@@ -413,13 +438,13 @@ def solve_task_5(source: Path, out_path: Path) -> pd.DataFrame:
     work.loc[work["vin"].isin(["nan", "None"]), "vin"] = None
     work.loc[work["service"].isin(["nan", "None"]), "service"] = None
 
-    # Оставляем только полностью валидные строки по ключевым полям.
+    # Оставляем валидные строки по ключевым полям.
+    # Сумма может отсутствовать: такие строки сохраняем для ручной проверки.
     clean = work[
         work["date"].notna()
         & work["client"].notna()
         & work["phone"].notna()
         & work["service"].notna()
-        & work["amount"].notna()
         & work["status"].notna()
     ].copy()
 
@@ -583,7 +608,8 @@ if __name__ == "__main__":
 #     Это нормально для этапа очистки:
 #     - служебные строки (ИТОГО, ---) удаляются,
 #     - полностью невалидные строки удаляются,
-#     - полные дубли оставляются в одном экземпляре.
+#     - полные дубли помечаются как "дубль", ID у них пустой
+#       (чтобы можно было удалить вручную после проверки).
 #
 # 15) Можно ли использовать этот файл как шаблон для других домашних?
 #     Да. Обычно меняется:
