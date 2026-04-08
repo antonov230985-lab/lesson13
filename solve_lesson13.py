@@ -439,13 +439,12 @@ def solve_task_5(source: Path, out_path: Path) -> pd.DataFrame:
     work.loc[work["service"].isin(["nan", "None"]), "service"] = None
 
     # Оставляем валидные строки по ключевым полям.
-    # Сумма может отсутствовать: такие строки сохраняем для ручной проверки.
+    # Сумма и статус могут отсутствовать: такие строки сохраняем для ручной проверки.
     clean = work[
         work["date"].notna()
         & work["client"].notna()
         & work["phone"].notna()
         & work["service"].notna()
-        & work["status"].notna()
     ].copy()
 
     # Удаляем полные дубли.
